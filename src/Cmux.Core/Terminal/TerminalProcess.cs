@@ -10,13 +10,14 @@ namespace Cmux.Core.Terminal;
 public sealed class TerminalProcess : IDisposable
 {
     private readonly PROCESS_INFORMATION _processInfo;
+    private readonly bool _processCreated;
     private IntPtr _attributeList;
     private IntPtr _cancelEvent;
     private bool _disposed;
     private readonly Thread _waitThread;
 
-    public int ProcessId => _processInfo.dwProcessId;
-    public IntPtr ProcessHandle => _processInfo.hProcess;
+    public int ProcessId => _processCreated ? _processInfo.dwProcessId : 0;
+    public IntPtr ProcessHandle => _processCreated ? _processInfo.hProcess : IntPtr.Zero;
 
     public event Action? Exited;
 
@@ -47,7 +48,18 @@ public sealed class TerminalProcess : IDisposable
             out _processInfo);
 
         if (!success)
+        {
+            // Clean up attribute list before throwing — _processInfo is uninitialized
+            if (_attributeList != IntPtr.Zero)
+            {
+                DeleteProcThreadAttributeList(_attributeList);
+                Marshal.FreeHGlobal(_attributeList);
+                _attributeList = IntPtr.Zero;
+            }
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create process with ConPTY.");
+        }
+
+        _processCreated = true;
 
         // Create a manual-reset event for signaling the wait thread to stop
         _cancelEvent = CreateEventW(IntPtr.Zero, bManualReset: true, bInitialState: false, IntPtr.Zero);
@@ -157,6 +169,7 @@ public sealed class TerminalProcess : IDisposable
     {
         get
         {
+            if (!_processCreated) return true;
             if (!GetExitCodeProcess(_processInfo.hProcess, out uint exitCode))
                 return true;
             return exitCode != STILL_ACTIVE;
@@ -165,7 +178,7 @@ public sealed class TerminalProcess : IDisposable
 
     public void Kill()
     {
-        if (!_disposed && !HasExited)
+        if (!_disposed && _processCreated && !HasExited)
         {
             TerminateProcess(_processInfo.hProcess, 1);
         }
