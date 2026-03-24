@@ -160,10 +160,21 @@ public sealed class TerminalSession : IDisposable
 
         WorkingDirectory = effectiveWorkingDirectory;
 
+        DiagLog($"[TerminalSession:{PaneId}] Start: cols={Buffer.Cols} rows={Buffer.Rows} cmd={command} cwd={effectiveWorkingDirectory}");
         lock (_lock)
         {
-            _console = PseudoConsole.Create((short)Buffer.Cols, (short)Buffer.Rows);
-            _process = new TerminalProcess(_console, command, effectiveWorkingDirectory);
+            try
+            {
+                _console = PseudoConsole.Create((short)Buffer.Cols, (short)Buffer.Rows);
+                DiagLog($"[TerminalSession:{PaneId}] PseudoConsole created, ReadPipe={_console.ReadPipe.DangerousGetHandle()}, WritePipe={_console.WritePipe.DangerousGetHandle()}");
+                _process = new TerminalProcess(_console, command, effectiveWorkingDirectory);
+                DiagLog($"[TerminalSession:{PaneId}] TerminalProcess created, PID={_process.ProcessId}");
+            }
+            catch (Exception ex)
+            {
+                DiagLog($"[TerminalSession:{PaneId}] Start FAILED: {ex}");
+                throw;
+            }
 
             _readStream = new FileStream(_console.ReadPipe, FileAccess.Read);
             _writeStream = new FileStream(_console.WritePipe, FileAccess.Write);
@@ -190,6 +201,7 @@ public sealed class TerminalSession : IDisposable
     {
         var buffer = new byte[4096];
         var ct = _readCts!.Token;
+        DiagLog($"[TerminalSession:{PaneId}] ReadLoop started");
         try
         {
             while (!ct.IsCancellationRequested)
@@ -199,10 +211,10 @@ public sealed class TerminalSession : IDisposable
                 {
                     stream = _readStream;
                 }
-                if (stream == null) break;
+                if (stream == null) { DiagLog($"[TerminalSession:{PaneId}] ReadLoop: stream is null, exiting"); break; }
 
                 int bytesRead = stream.Read(buffer, 0, buffer.Length);
-                if (bytesRead == 0) break;
+                if (bytesRead == 0) { DiagLog($"[TerminalSession:{PaneId}] ReadLoop: EOF, exiting"); break; }
 
                 var chunk = buffer.AsSpan(0, bytesRead).ToArray();
 
@@ -224,13 +236,21 @@ public sealed class TerminalSession : IDisposable
                 Redraw?.Invoke();
             }
         }
-        catch (IOException) when (_disposed)
+        catch (IOException ex) when (_disposed)
         {
-            // Expected on shutdown
+            DiagLog($"[TerminalSession:{PaneId}] ReadLoop: IOException on shutdown: {ex.Message}");
         }
-        catch (ObjectDisposedException)
+        catch (IOException ex)
         {
-            // Expected on shutdown
+            DiagLog($"[TerminalSession:{PaneId}] ReadLoop: IOException during operation: {ex}");
+        }
+        catch (ObjectDisposedException ex)
+        {
+            DiagLog($"[TerminalSession:{PaneId}] ReadLoop: ObjectDisposedException: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            DiagLog($"[TerminalSession:{PaneId}] ReadLoop: Unexpected exception: {ex}");
         }
     }
 
@@ -667,5 +687,18 @@ public sealed class TerminalSession : IDisposable
         _process?.Dispose();
         _console?.Dispose();
         _readCts?.Dispose();
+    }
+
+    private static readonly string _diagLogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "cmux-diag.log");
+
+    private static void DiagLog(string msg)
+    {
+        try
+        {
+            File.AppendAllText(_diagLogPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n");
+        }
+        catch { /* ignore */ }
     }
 }
