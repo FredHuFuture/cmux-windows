@@ -381,9 +381,12 @@ public class VtParser
                 _oscString.Append((char)b);
             else
             {
-                // OSC too long — abort to prevent OOM
+                // OSC too long — stay in OscString state to consume remaining
+                // bytes until the terminator (BEL/ST), but stop accumulating.
+                // The dispatch will be skipped since we clear the buffer.
                 _oscString.Clear();
-                _state = State.Ground;
+                // Remain in OscString — the terminator checks above will
+                // transition to Ground when BEL/ST arrives.
             }
         }
     }
