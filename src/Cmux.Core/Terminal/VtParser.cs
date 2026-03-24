@@ -30,6 +30,9 @@ public class VtParser
         SosPmApc,
     }
 
+    private const int MaxOscLength = 65536;   // 64 KB
+    private const int MaxCsiParams = 256;
+
     private State _state = State.Ground;
     private readonly StringBuilder _params = new();
     private readonly StringBuilder _intermediates = new();
@@ -294,7 +297,9 @@ public class VtParser
     {
         if (b is >= 0x30 and <= 0x39 or (byte)';' or (byte)':')
         {
-            _params.Append((char)b);
+            // Limit raw param string length to prevent unbounded growth
+            if (_params.Length < MaxCsiParams * 12)
+                _params.Append((char)b);
             return;
         }
 
@@ -372,7 +377,14 @@ public class VtParser
 
         if (b >= 0x20 || b == 0x09) // Printable or tab
         {
-            _oscString.Append((char)b);
+            if (_oscString.Length < MaxOscLength)
+                _oscString.Append((char)b);
+            else
+            {
+                // OSC too long — abort to prevent OOM
+                _oscString.Clear();
+                _state = State.Ground;
+            }
         }
     }
 
@@ -398,6 +410,9 @@ public class VtParser
         var paramStr = _params.ToString();
         foreach (var part in paramStr.Split(';'))
         {
+            if (_csiParams.Count >= MaxCsiParams)
+                break;
+
             if (int.TryParse(part, out int val))
                 _csiParams.Add(val);
             else
