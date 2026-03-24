@@ -11,6 +11,7 @@ public sealed class TerminalProcess : IDisposable
 {
     private readonly PROCESS_INFORMATION _processInfo;
     private IntPtr _attributeList;
+    private IntPtr _cancelEvent;
     private bool _disposed;
     private readonly Thread _waitThread;
 
@@ -47,6 +48,9 @@ public sealed class TerminalProcess : IDisposable
 
         if (!success)
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create process with ConPTY.");
+
+        // Create a manual-reset event for signaling the wait thread to stop
+        _cancelEvent = CreateEventW(IntPtr.Zero, bManualReset: true, bInitialState: false, IntPtr.Zero);
 
         // Start a background thread to wait for process exit
         _waitThread = new Thread(WaitForExitThread)
@@ -137,8 +141,11 @@ public sealed class TerminalProcess : IDisposable
 
     private void WaitForExitThread()
     {
-        WaitForSingleObject(_processInfo.hProcess, INFINITE);
-        Exited?.Invoke();
+        var handles = new[] { _processInfo.hProcess, _cancelEvent };
+        uint result = WaitForMultipleObjects(2, handles, bWaitAll: false, INFINITE);
+        // WAIT_OBJECT_0 means process exited; WAIT_OBJECT_0+1 means cancel event signaled
+        if (result == WAIT_OBJECT_0)
+            Exited?.Invoke();
     }
 
     public void WaitForExit()
@@ -171,10 +178,20 @@ public sealed class TerminalProcess : IDisposable
 
         Kill();
 
+        // Signal the cancel event so the wait thread wakes up, then join it
+        if (_cancelEvent != IntPtr.Zero)
+            SetEvent(_cancelEvent);
+        _waitThread.Join(TimeSpan.FromSeconds(3));
+
         if (_processInfo.hProcess != IntPtr.Zero)
             CloseHandle(_processInfo.hProcess);
         if (_processInfo.hThread != IntPtr.Zero)
             CloseHandle(_processInfo.hThread);
+        if (_cancelEvent != IntPtr.Zero)
+        {
+            CloseHandle(_cancelEvent);
+            _cancelEvent = IntPtr.Zero;
+        }
 
         if (_attributeList != IntPtr.Zero)
         {
