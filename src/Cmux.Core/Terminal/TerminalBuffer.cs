@@ -130,6 +130,8 @@ public class TerminalBuffer
         if (!ClampCursorToBounds())
             return;
 
+        int charWidth = UnicodeWidth.GetWidth(c);
+
         if (_wrapPending && AutoWrapMode)
         {
             CarriageReturn();
@@ -137,11 +139,23 @@ public class TerminalBuffer
             _wrapPending = false;
         }
 
+        // Wide character needs 2 columns — wrap early if it won't fit
+        if (charWidth == 2 && CursorCol + 1 >= Cols && AutoWrapMode)
+        {
+            // Fill the remaining single column with a space, then wrap
+            if (CursorCol < Cols)
+            {
+                _cells[CursorRow, CursorCol] = TerminalCell.Empty;
+            }
+            CarriageReturn();
+            LineFeed();
+        }
+
         if (InsertMode)
         {
-            // Shift characters right
-            for (int col = Cols - 1; col > CursorCol; col--)
-                _cells[CursorRow, col] = _cells[CursorRow, col - 1];
+            // Shift characters right by charWidth positions
+            for (int col = Cols - 1; col > CursorCol + charWidth - 1; col--)
+                _cells[CursorRow, col] = _cells[CursorRow, col - charWidth];
         }
 
         if (CursorRow >= 0 && CursorRow < Rows && CursorCol >= 0 && CursorCol < Cols)
@@ -151,17 +165,29 @@ public class TerminalBuffer
                 Character = c,
                 Attribute = CurrentAttribute,
                 IsDirty = true,
-                Width = 1,
+                Width = charWidth,
             };
+
+            // Wide char: place a padding cell in the next column
+            if (charWidth == 2 && CursorCol + 1 < Cols)
+            {
+                _cells[CursorRow, CursorCol + 1] = new TerminalCell
+                {
+                    Character = '\0',
+                    Attribute = CurrentAttribute,
+                    IsDirty = true,
+                    Width = 0, // padding cell for wide char
+                };
+            }
         }
 
-        if (CursorCol + 1 >= Cols)
+        if (CursorCol + charWidth >= Cols)
         {
             _wrapPending = true;
         }
         else
         {
-            CursorCol++;
+            CursorCol += charWidth;
         }
     }
 
