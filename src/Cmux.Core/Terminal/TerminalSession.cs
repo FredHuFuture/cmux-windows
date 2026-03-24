@@ -19,6 +19,7 @@ public sealed class TerminalSession : IDisposable
     private FileStream? _readStream;
     private FileStream? _writeStream;
     private Thread? _readThread;
+    private CancellationTokenSource? _readCts;
     private volatile bool _disposed;
     private volatile bool _daemonWriteLogged;
     private volatile bool _localWriteNullLogged;
@@ -172,6 +173,7 @@ public sealed class TerminalSession : IDisposable
                 ProcessExited?.Invoke();
             };
 
+            _readCts = new CancellationTokenSource();
             _readThread = new Thread(ReadLoop)
             {
                 IsBackground = true,
@@ -187,11 +189,19 @@ public sealed class TerminalSession : IDisposable
     private void ReadLoop()
     {
         var buffer = new byte[4096];
+        var ct = _readCts!.Token;
         try
         {
-            while (!_disposed && _readStream != null)
+            while (!ct.IsCancellationRequested)
             {
-                int bytesRead = _readStream.Read(buffer, 0, buffer.Length);
+                FileStream? stream;
+                lock (_lock)
+                {
+                    stream = _readStream;
+                }
+                if (stream == null) break;
+
+                int bytesRead = stream.Read(buffer, 0, buffer.Length);
                 if (bytesRead == 0) break;
 
                 var chunk = buffer.AsSpan(0, bytesRead).ToArray();
@@ -639,9 +649,23 @@ public sealed class TerminalSession : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        _readStream?.Dispose();
-        _writeStream?.Dispose();
+        // Signal the read loop to stop
+        try { _readCts?.Cancel(); } catch { }
+
+        // Dispose streams to unblock any pending Read call
+        lock (_lock)
+        {
+            _readStream?.Dispose();
+            _readStream = null;
+            _writeStream?.Dispose();
+            _writeStream = null;
+        }
+
+        // Wait for the read thread to finish
+        _readThread?.Join(TimeSpan.FromSeconds(2));
+
         _process?.Dispose();
         _console?.Dispose();
+        _readCts?.Dispose();
     }
 }
