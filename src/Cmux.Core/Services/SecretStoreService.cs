@@ -38,20 +38,25 @@ public static class SecretStoreService
 
             var blob = Convert.FromBase64String(encoded);
 
-            // Try new format: HMAC(32) || ciphertext
+            // Try new format first: HMAC(32) || ciphertext
             if (blob.Length > 32)
             {
-                var storedHmac = blob[..32];
-                var ciphertext = blob[32..];
+                try
+                {
+                    var storedHmac = blob[..32];
+                    var ciphertext = blob[32..];
 
-                var plain = ProtectedData.Unprotect(ciphertext, Entropy, DataProtectionScope.CurrentUser);
+                    var plain = ProtectedData.Unprotect(ciphertext, Entropy, DataProtectionScope.CurrentUser);
 
-                // Verify integrity
-                var computedHmac = ComputeHmac(ciphertext);
-                if (!CryptographicOperations.FixedTimeEquals(storedHmac, computedHmac))
-                    return null; // Integrity check failed
-
-                return Encoding.UTF8.GetString(plain);
+                    // Verify integrity
+                    var computedHmac = ComputeHmac(ciphertext);
+                    if (CryptographicOperations.FixedTimeEquals(storedHmac, computedHmac))
+                        return Encoding.UTF8.GetString(plain);
+                }
+                catch (CryptographicException)
+                {
+                    // New-format decryption failed — fall through to legacy
+                }
             }
 
             // Fallback: legacy format without HMAC (no entropy)
