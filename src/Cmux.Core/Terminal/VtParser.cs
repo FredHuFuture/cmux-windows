@@ -39,6 +39,7 @@ public class VtParser
     private readonly StringBuilder _oscString = new();
     private readonly List<int> _csiParams = [];
     private byte _collectChar;
+    private bool _oscOverflow;
 
     // UTF-8 decoder state
     private int _utf8Remaining;
@@ -354,23 +355,27 @@ public class VtParser
     {
         if (b == 0x07) // BEL terminates OSC
         {
-            OnOscDispatch?.Invoke(_oscString.ToString());
+            if (!_oscOverflow)
+                OnOscDispatch?.Invoke(_oscString.ToString());
+            _oscOverflow = false;
             _state = State.Ground;
             return;
         }
 
         if (b == 0x9C) // ST (8-bit)
         {
-            OnOscDispatch?.Invoke(_oscString.ToString());
+            if (!_oscOverflow)
+                OnOscDispatch?.Invoke(_oscString.ToString());
+            _oscOverflow = false;
             _state = State.Ground;
             return;
         }
 
         if (b == 0x1B) // Possible ST (ESC \)
         {
-            // Will be handled on next byte — peek ahead not needed,
-            // the ESC handler will fire. But we need to dispatch first.
-            OnOscDispatch?.Invoke(_oscString.ToString());
+            if (!_oscOverflow)
+                OnOscDispatch?.Invoke(_oscString.ToString());
+            _oscOverflow = false;
             _state = State.Escape;
             return;
         }
@@ -383,10 +388,8 @@ public class VtParser
             {
                 // OSC too long — stay in OscString state to consume remaining
                 // bytes until the terminator (BEL/ST), but stop accumulating.
-                // The dispatch will be skipped since we clear the buffer.
                 _oscString.Clear();
-                // Remain in OscString — the terminator checks above will
-                // transition to Ground when BEL/ST arrives.
+                _oscOverflow = true;
             }
         }
     }

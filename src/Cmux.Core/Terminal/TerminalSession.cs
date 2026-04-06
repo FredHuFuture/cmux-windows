@@ -689,14 +689,29 @@ public sealed class TerminalSession : IDisposable
         _readCts?.Dispose();
     }
 
+    private static readonly bool _diagEnabled =
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CMUX_DIAG"));
+
     private static readonly string _diagLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "cmux-diag.log");
 
+    private const long MaxDiagLogSize = 2 * 1024 * 1024; // 2 MB
+
     private static void DiagLog(string msg)
     {
+        if (!_diagEnabled) return;
         try
         {
+            // Rotate when the log exceeds the size limit
+            var fi = new FileInfo(_diagLogPath);
+            if (fi.Exists && fi.Length > MaxDiagLogSize)
+            {
+                var rotated = _diagLogPath + ".old";
+                File.Delete(rotated);
+                File.Move(_diagLogPath, rotated);
+            }
+
             File.AppendAllText(_diagLogPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n");
         }
         catch { /* ignore */ }

@@ -63,6 +63,8 @@ public sealed class TerminalProcess : IDisposable
 
         // Create a manual-reset event for signaling the wait thread to stop
         _cancelEvent = CreateEventW(IntPtr.Zero, bManualReset: true, bInitialState: false, IntPtr.Zero);
+        if (_cancelEvent == IntPtr.Zero)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateEventW failed.");
 
         // Start a background thread to wait for process exit
         _waitThread = new Thread(WaitForExitThread)
@@ -157,7 +159,14 @@ public sealed class TerminalProcess : IDisposable
         uint result = WaitForMultipleObjects(2, handles, bWaitAll: false, INFINITE);
         // WAIT_OBJECT_0 means process exited; WAIT_OBJECT_0+1 means cancel event signaled
         if (result == WAIT_OBJECT_0)
+        {
             Exited?.Invoke();
+        }
+        else if (result == 0xFFFFFFFF) // WAIT_FAILED
+        {
+            // Invalid handle or other failure — treat as exited to avoid silent hang
+            Exited?.Invoke();
+        }
     }
 
     public void WaitForExit()

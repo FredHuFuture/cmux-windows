@@ -6,7 +6,7 @@ namespace Cmux.Core.Services;
 
 /// <summary>
 /// Stores secrets encrypted with Windows DPAPI in %LOCALAPPDATA%/cmux/secrets.json.
-/// Each stored value is the Base64 encoding of: HMAC(32 bytes) || DPAPI ciphertext.
+/// DPAPI provides both confidentiality and integrity — no separate MAC is needed.
 /// </summary>
 public static class SecretStoreService
 {
@@ -38,28 +38,33 @@ public static class SecretStoreService
 
             var blob = Convert.FromBase64String(encoded);
 
-            // Try new format first: HMAC(32) || ciphertext
+            // Try current format: DPAPI with entropy
+            try
+            {
+                var plain = ProtectedData.Unprotect(blob, Entropy, DataProtectionScope.CurrentUser);
+                return Encoding.UTF8.GetString(plain);
+            }
+            catch (CryptographicException)
+            {
+                // Fall through to legacy formats
+            }
+
+            // Try previous format: HMAC(32) || ciphertext (strip the HMAC prefix)
             if (blob.Length > 32)
             {
                 try
                 {
-                    var storedHmac = blob[..32];
                     var ciphertext = blob[32..];
-
                     var plain = ProtectedData.Unprotect(ciphertext, Entropy, DataProtectionScope.CurrentUser);
-
-                    // Verify integrity
-                    var computedHmac = ComputeHmac(ciphertext);
-                    if (CryptographicOperations.FixedTimeEquals(storedHmac, computedHmac))
-                        return Encoding.UTF8.GetString(plain);
+                    return Encoding.UTF8.GetString(plain);
                 }
                 catch (CryptographicException)
                 {
-                    // New-format decryption failed — fall through to legacy
+                    // Fall through to oldest format
                 }
             }
 
-            // Fallback: legacy format without HMAC (no entropy)
+            // Oldest format: DPAPI without entropy
             var legacyPlain = ProtectedData.Unprotect(blob, optionalEntropy: null, DataProtectionScope.CurrentUser);
             return Encoding.UTF8.GetString(legacyPlain);
         }
@@ -86,14 +91,7 @@ public static class SecretStoreService
             {
                 var plain = Encoding.UTF8.GetBytes(value);
                 var ciphertext = ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser);
-                var hmac = ComputeHmac(ciphertext);
-
-                // Store as HMAC || ciphertext
-                var blob = new byte[hmac.Length + ciphertext.Length];
-                hmac.CopyTo(blob, 0);
-                ciphertext.CopyTo(blob, hmac.Length);
-
-                map[secretName] = Convert.ToBase64String(blob);
+                map[secretName] = Convert.ToBase64String(ciphertext);
             }
 
             SaveRawSecrets(map);
@@ -102,12 +100,6 @@ public static class SecretStoreService
         {
             // Ignore secret persistence errors to avoid crashing the app.
         }
-    }
-
-    private static byte[] ComputeHmac(byte[] data)
-    {
-        using var hmac = new HMACSHA256(Entropy);
-        return hmac.ComputeHash(data);
     }
 
     public static void RemoveSecret(string secretName)

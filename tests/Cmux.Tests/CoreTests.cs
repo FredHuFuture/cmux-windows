@@ -962,9 +962,22 @@ public class VtParserLimitsTests
         sb.Append('\x07');
         parser.Feed(sb.ToString());
 
-        // The OSC should have been aborted due to exceeding the limit
-        if (receivedOsc != null)
-            receivedOsc.Length.Should().BeLessThan(70000);
+        // The OSC should NOT have been dispatched — overflow suppresses it entirely
+        receivedOsc.Should().BeNull("overflowed OSC sequences must not be dispatched");
+    }
+
+    [Fact]
+    public void Feed_OscWithinMaxLength_IsDispatched()
+    {
+        var parser = new VtParser();
+        string? receivedOsc = null;
+        parser.OnOscDispatch = osc => receivedOsc = osc;
+
+        var payload = new string('B', 1000);
+        parser.Feed($"\x1b]0;{payload}\x07");
+
+        receivedOsc.Should().NotBeNull();
+        receivedOsc.Should().Contain(payload);
     }
 
     [Fact]

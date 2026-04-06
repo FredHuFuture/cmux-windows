@@ -392,6 +392,10 @@ public class TerminalControl : FrameworkElement
                 dc.DrawRectangle(null, focusPen, new Rect(0, 0, ActualWidth, ActualHeight));
             }
 
+            // Lock buffer to prevent torn reads from background mutations
+            lock (buffer.SyncRoot)
+            {
+
             // Calculate scrollback offset
             int scrollbackCount = buffer.ScrollbackCount;
             bool isScrolledBack = _scrollOffset < 0;
@@ -590,6 +594,8 @@ public class TerminalControl : FrameworkElement
                     new Rect(ix, 6, iw, ih), 4, 4);
                 dc.DrawText(indicatorText, new Point(ix + 6, 8));
             }
+
+            } // lock (buffer.SyncRoot)
         }
         catch (Exception ex)
         {
